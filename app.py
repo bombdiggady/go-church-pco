@@ -146,4 +146,5 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
             st.session_state.messages.append({"role": "assistant", "content": full_response})
         except Exception as e:
 
-            message_placeholder.error("An error occurred connecting to AI.")
+            message_placeholder.error(f"An error occurred connecting to AI: {e}")
+
