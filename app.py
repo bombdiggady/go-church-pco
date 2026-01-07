@@ -49,30 +49,34 @@ def search_context(query):
     context_data = []
 
     # 1. Search PEOPLE
-    # We search for the name provided in the query
     people_data = pco_api_call("/people/v2/people", params={"where[search_name_or_email]": query, "per_page": 3})
     if "data" in people_data and people_data["data"]:
-        names = [f"{p['attributes']['name']} ({p['attributes']['status']})" for p in people_data['data']]
+        # Safely get name, default to "Unknown" if missing
+        names = [f"{p['attributes'].get('name', 'Unknown')} ({p['attributes'].get('status', 'Unknown')})" for p in people_data['data']]
         context_data.append(f"Found in People Database: {', '.join(names)}")
 
     # 2. Search SERVICES (Plans)
-    # Get the most recent/upcoming plans
     services_data = pco_api_call("/services/v2/service_types")
     if "data" in services_data and services_data["data"]:
-        service_names = [s['attributes']['name'] for s in services_data['data'][:5]]
+        service_names = [s['attributes'].get('name', 'Unnamed Service') for s in services_data['data'][:5]]
         context_data.append(f"Available Service Types: {', '.join(service_names)}")
     
-    # 3. Search CALENDAR
-    # Look for events matching the query
-    calendar_data = pco_api_call("/calendar/v2/events", params={"where[title]": query, "per_page": 3})
+    # 3. Search CALENDAR (FIXED)
+    # Changed 'title' to 'name' to match PCO API standards
+    calendar_data = pco_api_call("/calendar/v2/events", params={"where[name]": query, "per_page": 3})
     if "data" in calendar_data and calendar_data["data"]:
-        events = [f"{e['attributes']['title']} (Visible in Kiosks: {e['attributes']['visible_in_kiosks']})" for e in calendar_data['data']]
+        events = []
+        for e in calendar_data['data']:
+            attrs = e.get('attributes', {})
+            # Use .get() to prevent crashes if a field is missing
+            name = attrs.get('name', 'Unnamed Event')
+            events.append(name)
         context_data.append(f"Found in Calendar: {', '.join(events)}")
 
     # 4. Search GROUPS
     groups_data = pco_api_call("/groups/v2/groups", params={"where[name]": query, "per_page": 3})
     if "data" in groups_data and groups_data["data"]:
-        groups = [g['attributes']['name'] for g in groups_data['data']]
+        groups = [g['attributes'].get('name', 'Unnamed Group') for g in groups_data['data']]
         context_data.append(f"Found in Groups: {', '.join(groups)}")
 
     if not context_data:
@@ -141,4 +145,5 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
             message_placeholder.markdown(full_response)
             st.session_state.messages.append({"role": "assistant", "content": full_response})
         except Exception as e:
+
             message_placeholder.error("An error occurred connecting to AI.")
