@@ -121,7 +121,7 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
         retrieved_info = search_context(prompt)
         
         # B. AI Synthesis
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         system_prompt = f"""
         You are a helpful PCO administrator for GO Church.
@@ -147,5 +147,6 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
         except Exception as e:
 
             message_placeholder.error(f"An error occurred connecting to AI: {e}")
+
 
 
