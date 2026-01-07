@@ -95,8 +95,10 @@ This tool uses AI to answer questions about our church database.
 # Sidebar for tips
 with st.sidebar:
     st.header("How to use")
-    st.info("Ask specifically, e.g., 'Is John Doe in our database?' or 'What events are on the calendar?'")
-    st.warning("Data is Read-Only. You cannot change PCO data here.")
+    st.info("Ask specifically, e.g., 'Is John Doe in our database?'")
+    st.warning("Data is Read-Only.")
+    st.markdown("---") 
+    st.markdown("[📚 Official PCO Support](https://support.planningcenteronline.com/hc/en-us)") # <--- ADD THIS
 
 # Chat Logic
 if "messages" not in st.session_state:
@@ -123,20 +125,47 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
         # B. AI Synthesis
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        system_prompt = f"""
-        You are a helpful PCO administrator for GO Church.
-        User Query: {prompt}
+        # DYNAMIC KNOWLEDGE BASE
+        # We inject this text so the AI understands PCO terminology & GO Church lingo
+        pco_knowledge_base = """
+        PCO STRUCTURE & CONTEXT:
+        - **People:** The master database of members. "Status" usually refers to Member, Regular Attender, or Visitor.
+        - **Gatherings (PCO "Services"):** GO Church calls liturgical services "Gatherings". In the API, this is the "Services" module.
+        - **Calendar:** The master church calendar for room booking and public events.
+        - **Check-ins:** Used primarily for Kids Ministry and attendance tracking.
+        - **Groups:** Small groups, Bible studies, and home groups.
+        - **Registrations:** Sign-ups for events (camps, retreats).
         
-        Here is the REAL data found in the PCO account matching their query:
+        OFFICIAL SUPPORT RESOURCE:
+        If the API data is insufficient, refer the user to: https://support.planningcenteronline.com/hc/en-us
+        """
+
+        system_prompt = f"""
+        You are the "GO Church PCO Specialist"—a helpful, friendly AI assistant for church staff.
+        
+        YOUR GOAL:
+        Help staff find information in the GO Church PCO account and understand how to use PCO better.
+
+        TERMINOLOGY RULE:
+        - **"Gatherings" vs "Services":** The PCO database calls them "Services", but GO Church calls them "Gatherings". 
+        - If the user asks about "Services", understand they mean Gatherings.
+        - In your output, ALWAYS refer to them as "Gatherings" (e.g., "I found 3 upcoming Gatherings...").
+
+        CONTEXT:
+        {pco_knowledge_base}
+        
+        REAL-TIME DATA FROM GO CHURCH ACCOUNT:
         ---
         {retrieved_info}
         ---
         
         INSTRUCTIONS:
-        1. Answer the user's question using the retrieved data.
-        2. If the retrieved data is empty, give general advice on where to look in PCO.
-        3. Tone: Friendly, church-staff professional.
-        4. ABSOLUTE RULE: Never mention Giving, Donations, or Tithes details. If asked, say you don't have access.
+        1. **Prioritize Real Data:** If the answer is in the "REAL-TIME DATA" section above, quote it explicitly.
+        2. **Fill the Gaps:** If the user asks a "How-to" question (e.g., "How do I add a song?"), rely on your general knowledge of Planning Center Online to explain the steps.
+        3. **Giving Firewall:** NEVER discuss giving, donations, or financial stats. If asked, state: "I do not have access to financial data."
+        4. **Support Link:** If you cannot answer, suggest they search the official PCO support site.
+
+        User Question: {prompt}
         """
         
         try:
@@ -147,6 +176,7 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
         except Exception as e:
 
             message_placeholder.error(f"An error occurred connecting to AI: {e}")
+
 
 
 
