@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import google.generativeai as genai
 import os
+import json
 
 # --- CONFIGURATION & SETUP ---
 st.set_page_config(
@@ -30,97 +31,107 @@ def pco_api_call(endpoint, params=None):
     auth = (PCO_APP_ID, PCO_SECRET)
     try:
         response = requests.get(f"{BASE_URL}{endpoint}", auth=auth, params=params, timeout=10)
-        # return the full object so we can debug status codes
         return response
     except Exception as e:
         return None
 
 def search_context(query):
     """
-    Performs a 'federated search' across allowed PCO modules with Deep Diagnostics.
-    Strictly ignores Giving.
+    Performs a 'federated search' across allowed PCO modules with CRASH PROTECTION.
     """
     context_data = []
     debug_log = []
     
-    # Clean the query (remove accidental spaces)
     clean_query = query.strip()
 
     # 0. DIAGNOSTIC: Check which Organization we are connected to
+    # CRASH FIX: Wrapped in try/except to handle non-JSON responses gracefully
     org_res = pco_api_call("/")
     if org_res and org_res.status_code == 200:
-        org_name = org_res.json().get("data", {}).get("attributes", {}).get("name", "Unknown Org")
-        debug_log.append(f"🏢 Connected to Organization: **{org_name}**")
+        try:
+            org_data = org_res.json()
+            org_name = org_data.get("data", {}).get("attributes", {}).get("name", "Unknown Org")
+            debug_log.append(f"🏢 Connected to Organization: **{org_name}**")
+        except json.JSONDecodeError:
+            # If PCO returns HTML or empty text, don't crash. Just log it.
+            debug_log.append(f"⚠️ Org Check Failed: API returned invalid data. (Raw: {org_res.text[:50]}...)")
     else:
         debug_log.append("❌ Org Check: Failed to connect to PCO Root.")
 
     # 1. Search PEOPLE (With Retry Logic)
-    # First attempt: Search full query
     res = pco_api_call("/people/v2/people", params={"where[search_name_or_email]": clean_query, "per_page": 5})
     
     found_people = False
     if res and res.status_code == 200:
-        people = res.json().get("data", [])
-        if people:
-            found_people = True
-            debug_log.append(f"✅ People API: Found {len(people)} matches for '{clean_query}'")
-            names = [f"{p['attributes'].get('name', 'Unknown')} ({p['attributes'].get('status', 'Unknown')})" for p in people]
-            context_data.append(f"Found in People Directory: {', '.join(names)}")
-        else:
-            debug_log.append(f"⚠️ People API: 0 results for '{clean_query}'. Trying partial search...")
-            
-            # RETRY: Try searching just the first word (e.g., "Alex" instead of "Alex Miller")
-            first_word = clean_query.split(' ')[0]
-            # Only retry if the first word is distinct from the full query
-            if len(first_word) > 2 and first_word != clean_query:
-                retry_res = pco_api_call("/people/v2/people", params={"where[search_name_or_email]": first_word, "per_page": 3})
-                if retry_res and retry_res.status_code == 200:
-                    retry_data = retry_res.json().get("data", [])
-                    if retry_data:
-                        found_people = True
-                        debug_log.append(f"✅ People API: Retry found {len(retry_data)} matches for '{first_word}'")
-                        names = [f"{p['attributes'].get('name', 'Unknown')} ({p['attributes'].get('status', 'Unknown')})" for p in retry_data]
-                        context_data.append(f"No exact match, but found similar names: {', '.join(names)}")
-                    else:
-                        debug_log.append(f"❌ People API: Retry also found 0 records for '{first_word}'.")
+        try:
+            people = res.json().get("data", [])
+            if people:
+                found_people = True
+                debug_log.append(f"✅ People API: Found {len(people)} matches for '{clean_query}'")
+                names = [f"{p['attributes'].get('name', 'Unknown')} ({p['attributes'].get('status', 'Unknown')})" for p in people]
+                context_data.append(f"Found in People Directory: {', '.join(names)}")
             else:
-                 debug_log.append("❌ People API: Partial search skipped (query too short).")
-
+                debug_log.append(f"⚠️ People API: 0 results for '{clean_query}'. Trying partial search...")
+                
+                # RETRY: Try searching just the first word
+                first_word = clean_query.split(' ')[0]
+                if len(first_word) > 2 and first_word != clean_query:
+                    retry_res = pco_api_call("/people/v2/people", params={"where[search_name_or_email]": first_word, "per_page": 3})
+                    if retry_res and retry_res.status_code == 200:
+                        retry_data = retry_res.json().get("data", [])
+                        if retry_data:
+                            found_people = True
+                            debug_log.append(f"✅ People API: Retry found {len(retry_data)} matches for '{first_word}'")
+                            names = [f"{p['attributes'].get('name', 'Unknown')} ({p['attributes'].get('status', 'Unknown')})" for p in retry_data]
+                            context_data.append(f"No exact match, but found similar names: {', '.join(names)}")
+                        else:
+                            debug_log.append(f"❌ People API: Retry also found 0 records for '{first_word}'.")
+        except json.JSONDecodeError:
+            debug_log.append("❌ People API: Returned invalid JSON.")
+            
     elif res and res.status_code == 403:
         context_data.append("ERROR: Permission Denied to People Database.")
         debug_log.append("❌ People API: 403 Forbidden (Check API Key 'People' Scope)")
 
     # 2. Search SERVICES (Gatherings)
-    # We always fetch this to give context about upcoming events
     res = pco_api_call("/services/v2/service_types")
     if res and res.status_code == 200:
-        data = res.json().get("data", [])
-        debug_log.append(f"✅ Services API: Success. Found {len(data)} Gathering Types.")
-        # Only list specific names if the user didn't find a person (to save reading time)
-        types = [s['attributes'].get('name', 'Unnamed') for s in data[:8]]
-        context_data.append(f"Available Gathering Types: {', '.join(types)}")
+        try:
+            data = res.json().get("data", [])
+            debug_log.append(f"✅ Services API: Success. Found {len(data)} Gathering Types.")
+            # Only list names if we haven't found a person yet
+            types = [s['attributes'].get('name', 'Unnamed') for s in data[:8]]
+            context_data.append(f"Available Gathering Types: {', '.join(types)}")
+        except json.JSONDecodeError:
+            debug_log.append("❌ Services API: Returned invalid JSON.")
     elif res and res.status_code == 403:
         debug_log.append("❌ Services API: 403 Forbidden")
 
     # 3. Search CALENDAR
     res = pco_api_call("/calendar/v2/events", params={"where[name]": clean_query, "per_page": 3})
     if res and res.status_code == 200:
-        events = res.json().get("data", [])
-        if events:
-            debug_log.append(f"✅ Calendar API: Found {len(events)} events.")
-            event_names = [e['attributes'].get('name', 'Unnamed') for e in events]
-            context_data.append(f"Found in Calendar: {', '.join(event_names)}")
-        else:
-            debug_log.append("✅ Calendar API: 0 events found.")
+        try:
+            events = res.json().get("data", [])
+            if events:
+                debug_log.append(f"✅ Calendar API: Found {len(events)} events.")
+                event_names = [e['attributes'].get('name', 'Unnamed') for e in events]
+                context_data.append(f"Found in Calendar: {', '.join(event_names)}")
+            else:
+                debug_log.append("✅ Calendar API: 0 events found.")
+        except json.JSONDecodeError:
+            debug_log.append("❌ Calendar API: Returned invalid JSON.")
 
     # 4. Search GROUPS
     res = pco_api_call("/groups/v2/groups", params={"where[name]": clean_query, "per_page": 3})
     if res and res.status_code == 200:
-        groups = res.json().get("data", [])
-        if groups:
-            debug_log.append(f"✅ Groups API: Found {len(groups)} groups.")
-            group_names = [g['attributes'].get('name', 'Unnamed') for g in groups]
-            context_data.append(f"Found in Groups: {', '.join(group_names)}")
+        try:
+            groups = res.json().get("data", [])
+            if groups:
+                debug_log.append(f"✅ Groups API: Found {len(groups)} groups.")
+                group_names = [g['attributes'].get('name', 'Unnamed') for g in groups]
+                context_data.append(f"Found in Groups: {', '.join(group_names)}")
+        except json.JSONDecodeError:
+             debug_log.append("❌ Groups API: Returned invalid JSON.")
     
     # Final Output Construction
     final_output = "\n".join(context_data)
@@ -202,7 +213,7 @@ if prompt := st.chat_input("Ask a question about GO Church PCO..."):
 
         TERMINOLOGY RULE:
         - **"Gatherings" vs "Services":** The PCO database calls them "Services", but GO Church calls them "Gatherings". 
-        - If the user asks about "Services", understand they mean Gatherings.
+        - If the user asks a specific question and you cannot find the exact answer in the Retrieved Data, use your general knowledge of how Planning Center works to explain WHERE they should look.
         - In your output, ALWAYS refer to them as "Gatherings" (e.g., "I found 3 upcoming Gatherings...").
 
         CONTEXT:
